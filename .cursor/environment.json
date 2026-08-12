@@ -1,0 +1,9 @@
+{
+  "name": "jfs (Java 21 + Maven)",
+  "user": "root",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "install": "mvn -B -ntp -DskipTests package"
+}
