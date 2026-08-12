@@ -1,6 +1,0 @@
-# Data directory
-addr = ":8080"
-data_dir = "./data"
-volumes = 2
-volume_size = 1073741824
-worker_id = 1

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Minimal end-to-end demo against a running jfs server.
 set -euo pipefail
 BASE="${1:-http://127.0.0.1:8080}"
 

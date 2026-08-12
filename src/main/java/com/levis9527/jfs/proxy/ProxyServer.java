@@ -1,0 +1,231 @@
+package com.levis9527.jfs.proxy;
+
+import com.google.gson.Gson;
+import com.levis9527.jfs.directory.Directory;
+import com.levis9527.jfs.directory.DirectoryException;
+import com.levis9527.jfs.meta.MetaTypes;
+import com.levis9527.jfs.store.Store;
+
+import com.sun.net.httpserver.Headers;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.Executors;
+
+/**
+ * Public HTTP API (bfs proxy).
+ */
+public final class ProxyServer {
+    private final Directory directory;
+    private final Store store;
+    private final Gson gson = new Gson();
+    private HttpServer server;
+
+    public ProxyServer(Directory directory, Store store) {
+        this.directory = directory;
+        this.store = store;
+    }
+
+    public void start(String host, int port) throws IOException {
+        server = HttpServer.create(new InetSocketAddress(host, port), 0);
+        server.createContext("/ping", this::ping);
+        server.createContext("/stats", this::stats);
+        server.createContext("/upload", this::upload);
+        server.createContext("/get", this::get);
+        server.createContext("/del", this::del);
+        server.createContext("/list", this::list);
+        server.createContext("/", this::restObject);
+        server.setExecutor(Executors.newCachedThreadPool());
+        server.start();
+    }
+
+    public void stop() {
+        if (server != null) {
+            server.stop(0);
+        }
+    }
+
+    private void ping(HttpExchange ex) throws IOException {
+        writeJson(ex, 200, MetaTypes.RET_OK, "pong", null);
+    }
+
+    private void stats(HttpExchange ex) throws IOException {
+        writeJson(ex, 200, MetaTypes.RET_OK, null, store.states());
+    }
+
+    private void upload(HttpExchange ex) throws IOException {
+        if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
+            writeJson(ex, 405, MetaTypes.RET_BAD_REQUEST, "POST required", null);
+            return;
+        }
+        Map<String, String> q = query(ex);
+        String bucket = q.getOrDefault("bucket", "");
+        String filename = q.getOrDefault("filename", "");
+        String mime = q.getOrDefault("mime", "");
+        byte[] data = readBody(ex);
+        doUpload(ex, bucket, filename, mime, data);
+    }
+
+    private void doUpload(HttpExchange ex, String bucket, String filename, String mime, byte[] data) throws IOException {
+        try {
+            var res = directory.upload(bucket, filename, mime, data);
+            writeJson(ex, 200, MetaTypes.RET_OK, null, res);
+        } catch (DirectoryException e) {
+            if (e.getMessage() != null && e.getMessage().contains("already exists")) {
+                writeJson(ex, 409, MetaTypes.RET_CONFLICT, e.getMessage(), null);
+            } else {
+                writeJson(ex, 400, MetaTypes.RET_BAD_REQUEST, e.getMessage(), null);
+            }
+        } catch (Exception e) {
+            writeJson(ex, 500, MetaTypes.RET_INTERNAL, e.getMessage(), null);
+        }
+    }
+
+    private void get(HttpExchange ex) throws IOException {
+        Map<String, String> q = query(ex);
+        String bucket = q.getOrDefault("bucket", "");
+        String filename = q.getOrDefault("filename", "");
+        boolean metaOnly = "1".equals(q.get("meta"));
+        try {
+            var got = directory.getData(bucket, filename);
+            if (metaOnly) {
+                writeJson(ex, 200, MetaTypes.RET_OK, null, got.meta());
+                return;
+            }
+            Headers h = ex.getResponseHeaders();
+            String mime = got.meta().mime;
+            h.set("Content-Type", mime == null || mime.isBlank() ? "application/octet-stream" : mime);
+            h.set("X-JFS-Key", String.valueOf(got.meta().key));
+            h.set("X-JFS-Vid", String.valueOf(got.meta().vid));
+            ex.sendResponseHeaders(200, got.data().length);
+            try (OutputStream os = ex.getResponseBody()) {
+                os.write(got.data());
+            }
+        } catch (DirectoryException e) {
+            writeJson(ex, 404, MetaTypes.RET_NOT_FOUND, e.getMessage(), null);
+        } catch (Exception e) {
+            writeJson(ex, 500, MetaTypes.RET_INTERNAL, e.getMessage(), null);
+        }
+    }
+
+    private void del(HttpExchange ex) throws IOException {
+        String method = ex.getRequestMethod();
+        if (!"POST".equalsIgnoreCase(method) && !"DELETE".equalsIgnoreCase(method)) {
+            writeJson(ex, 405, MetaTypes.RET_BAD_REQUEST, "POST/DELETE required", null);
+            return;
+        }
+        Map<String, String> q = query(ex);
+        try {
+            directory.delete(q.getOrDefault("bucket", ""), q.getOrDefault("filename", ""));
+            writeJson(ex, 200, MetaTypes.RET_OK, "deleted", null);
+        } catch (DirectoryException e) {
+            writeJson(ex, 404, MetaTypes.RET_NOT_FOUND, e.getMessage(), null);
+        } catch (Exception e) {
+            writeJson(ex, 500, MetaTypes.RET_INTERNAL, e.getMessage(), null);
+        }
+    }
+
+    private void list(HttpExchange ex) throws IOException {
+        Map<String, String> q = query(ex);
+        writeJson(ex, 200, MetaTypes.RET_OK, null, directory.list(q.get("bucket")));
+    }
+
+    private void restObject(HttpExchange ex) throws IOException {
+        String path = ex.getRequestURI().getPath();
+        if ("/".equals(path)) {
+            writeJson(ex, 200, MetaTypes.RET_OK, "jfs ready", Map.of(
+                    "upload", "POST /upload?bucket=&filename=",
+                    "get", "GET /get?bucket=&filename=",
+                    "del", "POST /del?bucket=&filename=",
+                    "rest", "PUT|GET|DELETE /{bucket}/{filename}"
+            ));
+            return;
+        }
+        String trimmed = path.startsWith("/") ? path.substring(1) : path;
+        int slash = trimmed.indexOf('/');
+        if (slash <= 0 || slash == trimmed.length() - 1) {
+            writeJson(ex, 400, MetaTypes.RET_BAD_REQUEST, "use /{bucket}/{filename}", null);
+            return;
+        }
+        String bucket = trimmed.substring(0, slash);
+        String filename = trimmed.substring(slash + 1);
+        String method = ex.getRequestMethod();
+        switch (method) {
+            case "PUT", "POST" -> {
+                String mime = ex.getRequestHeaders().getFirst("Content-Type");
+                doUpload(ex, bucket, filename, mime, readBody(ex));
+            }
+            case "GET" -> {
+                try {
+                    var got = directory.getData(bucket, filename);
+                    Headers h = ex.getResponseHeaders();
+                    String mime = got.meta().mime;
+                    h.set("Content-Type", mime == null || mime.isBlank() ? "application/octet-stream" : mime);
+                    ex.sendResponseHeaders(200, got.data().length);
+                    try (OutputStream os = ex.getResponseBody()) {
+                        os.write(got.data());
+                    }
+                } catch (DirectoryException e) {
+                    writeJson(ex, 404, MetaTypes.RET_NOT_FOUND, e.getMessage(), null);
+                } catch (Exception e) {
+                    writeJson(ex, 500, MetaTypes.RET_INTERNAL, e.getMessage(), null);
+                }
+            }
+            case "DELETE" -> {
+                try {
+                    directory.delete(bucket, filename);
+                    writeJson(ex, 200, MetaTypes.RET_OK, "deleted", null);
+                } catch (DirectoryException e) {
+                    writeJson(ex, 404, MetaTypes.RET_NOT_FOUND, e.getMessage(), null);
+                } catch (Exception e) {
+                    writeJson(ex, 500, MetaTypes.RET_INTERNAL, e.getMessage(), null);
+                }
+            }
+            default -> writeJson(ex, 405, MetaTypes.RET_BAD_REQUEST, "method not allowed", null);
+        }
+    }
+
+    private void writeJson(HttpExchange ex, int http, int ret, String msg, Object data) throws IOException {
+        byte[] body = gson.toJson(new MetaTypes.ApiResponse(ret, msg, data)).getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        ex.sendResponseHeaders(http, body.length);
+        try (OutputStream os = ex.getResponseBody()) {
+            os.write(body);
+        }
+    }
+
+    private static byte[] readBody(HttpExchange ex) throws IOException {
+        try (InputStream in = ex.getRequestBody()) {
+            return in.readAllBytes();
+        }
+    }
+
+    private static Map<String, String> query(HttpExchange ex) {
+        Map<String, String> map = new HashMap<>();
+        String raw = ex.getRequestURI().getRawQuery();
+        if (raw == null || raw.isBlank()) {
+            return map;
+        }
+        for (String part : raw.split("&")) {
+            int eq = part.indexOf('=');
+            if (eq < 0) {
+                map.put(urlDecode(part), "");
+            } else {
+                map.put(urlDecode(part.substring(0, eq)), urlDecode(part.substring(eq + 1)));
+            }
+        }
+        return map;
+    }
+
+    private static String urlDecode(String s) {
+        return URLDecoder.decode(s, StandardCharsets.UTF_8);
+    }
+}
