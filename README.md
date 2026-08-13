@@ -9,6 +9,7 @@
 - [架构](#架构对照-bfs)
 - [存储模型](#存储模型)
 - [启动与使用](#启动与使用)
+- [CLI](#cli)
 - [管理控制台](#管理控制台)
 - [HTTP API 速查](#http-api-速查)
 - [目录结构](#目录结构)
@@ -16,12 +17,13 @@
 
 ## 架构（对照 bfs）
 
-| 模块 | bfs (Go) | jfs (Java) |
-|------|----------|------------|
-| **store** | 物理存储，needle 追加写入 volume | `com.levis9527.jfs.store` / `volume` / `needle` |
-| **directory** | 调度 + 元数据（HBase）+ 分配 key | `com.levis9527.jfs.directory` + `idgen`（本地 JSONL） |
-| **proxy** | 对外 HTTP / bucket API | `com.levis9527.jfs.proxy`（JDK `HttpServer`） |
-| pitchfork / ops / ZK | 监控与运维 | `/admin` 控制台 + `/ping` `/overview` `/stats` |
+| 模块 | Maven 工程 | 职责 |
+|------|------------|------|
+| **common** | `jfs-common` | 元数据 DTO、snowflake |
+| **store** | `jfs-store` | needle / volume / 索引，物理存储 |
+| **directory** | `jfs-directory` | 元数据、选卷、key 分配 |
+| **server** | `jfs-server` | HTTP API、`/admin`、一体机入口 |
+| **cli** | `jfs-cli` | 命令行上传/下载/列表/改元数据 |
 
 请求路径：
 
@@ -69,15 +71,21 @@ mvn test
 mvn -q package
 ```
 
+产物：
+
+- `jfs-server/target/jfs-server.jar` — 存储服务
+- `jfs-cli/target/jfs-cli.jar` — 文件操作 CLI
+
 ### 启动
 
 ```bash
-java -jar target/jfs-0.1.0-SNAPSHOT.jar \
+java -jar jfs-server/target/jfs-server.jar \
   -addr :8080 \
   -data ./data \
   -volumes 2 \
   -volume-size 1073741824 \
-  -worker 1
+  -worker 1 \
+  -token change-me
 ```
 
 成功日志：
@@ -106,6 +114,26 @@ curl -s http://127.0.0.1:8080/ping
 ```
 
 停止：前台用 `Ctrl+C`；后台记下 PID 后 `kill`。
+
+## CLI
+
+服务启动后，用 CLI 处理文件（`--url` / `--token` 也可写成环境变量 `JFS_URL`、`JFS_TOKEN`）：
+
+```bash
+CLI="java -jar jfs-cli/target/jfs-cli.jar --url http://127.0.0.1:8080 --token change-me"
+
+$CLI ping
+$CLI put photo.jpg img/photo.jpg            # 公开上传
+$CLI put secret.jpg sec/secret.jpg --auth   # 私有上传
+$CLI ls -b img
+$CLI get img/photo.jpg -o photo.jpg
+$CLI cat img/photo.jpg
+$CLI meta img/photo.jpg --auth 1            # 改为读时鉴权
+$CLI rm img/photo.jpg
+$CLI overview
+```
+
+完整命令见 [docs/startup.md](docs/startup.md#cli)。
 
 ## 管理控制台
 
@@ -148,20 +176,15 @@ curl -X POST "http://127.0.0.1:8080/meta?bucket=img&filename=photo.jpg&newFilena
 ## 目录结构
 
 ```
-docs/startup.md           启动、参数、API、排错
-examples/demo.sh          启动后冒烟脚本
-configs/jfs.conf          启动参数备忘（需手动抄到命令行）
-src/main/java/com/levis9527/jfs/
-  JfsServer.java          一体机入口
-  needle/                 needle 编解码
-  index/                  volume 索引
-  volume/                 volume（superblock + 内存 map）
-  store/                  多 volume 管理与选卷
-  directory/              元数据与上传调度
-  proxy/                  HTTP API + /admin 控制台
-  idgen/                  snowflake key
-  meta/                   公共结构体
-src/main/resources/web/   管理页面（HTML/CSS/JS）
+pom.xml                   父工程
+jfs-common/               元数据 DTO、snowflake
+jfs-store/                needle / volume / 索引 / store
+jfs-directory/            元数据与选卷
+jfs-server/               HTTP API、/admin、JfsServer
+jfs-cli/                  文件操作 CLI
+docs/startup.md           启动、参数、CLI、API、排错
+examples/demo.sh          HTTP 冒烟
+configs/jfs.conf          启动参数备忘
 ```
 
 数据目录（`-data`）启动后：

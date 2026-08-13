@@ -34,23 +34,20 @@ mvn -q package
 
 | 文件 | 用途 |
 |------|------|
-| `target/jfs-0.1.0-SNAPSHOT.jar` | 可直接运行的 shade jar（推荐） |
-| `target/original-jfs-0.1.0-SNAPSHOT.jar` | 不含依赖的原始 jar |
-
-不打包、直接从源码启动也可以：
+| `jfs-server/target/jfs-server.jar` | 存储服务（shade jar） |
+| `jfs-cli/target/jfs-cli.jar` | 文件操作命令行客户端 |
 
 ```bash
-mvn -q -DskipTests exec:java -Dexec.mainClass=com.levis9527.jfs.JfsServer
+java -jar jfs-server/target/jfs-server.jar --help
+java -jar jfs-cli/target/jfs-cli.jar --help
 ```
-
-（上面这条需要本机已安装 `exec-maven-plugin` 或自行加插件；日常更推荐 `java -jar`。）
 
 ## 3. 启动服务
 
 ### 3.1 默认启动
 
 ```bash
-java -jar target/jfs-0.1.0-SNAPSHOT.jar
+java -jar jfs-server/target/jfs-server.jar
 ```
 
 默认行为：
@@ -69,7 +66,7 @@ jfs listening on 0.0.0.0:8080 (data=/abs/path/data volumes=2)
 查看帮助：
 
 ```bash
-java -jar target/jfs-0.1.0-SNAPSHOT.jar --help
+java -jar jfs-server/target/jfs-server.jar --help
 ```
 
 ### 3.2 命令行参数
@@ -88,7 +85,7 @@ java -jar target/jfs-0.1.0-SNAPSHOT.jar --help
 
 ```bash
 # 指定端口与数据目录
-java -jar target/jfs-0.1.0-SNAPSHOT.jar \
+java -jar jfs-server/target/jfs-server.jar \
   -addr :8080 \
   -data ./data \
   -volumes 2 \
@@ -96,10 +93,10 @@ java -jar target/jfs-0.1.0-SNAPSHOT.jar \
   -worker 1
 
 # 仅本机可访问
-java -jar target/jfs-0.1.0-SNAPSHOT.jar -addr 127.0.0.1:8080 -data /var/lib/jfs
+java -jar jfs-server/target/jfs-server.jar -addr 127.0.0.1:8080 -data /var/lib/jfs
 
 # 开启按文件鉴权（推荐生产）
-java -jar target/jfs-0.1.0-SNAPSHOT.jar -token 'change-me' -addr :8080 -data ./data
+java -jar jfs-server/target/jfs-server.jar -token 'change-me' -addr :8080 -data ./data
 # 或：export JFS_TOKEN=change-me
 ```
 
@@ -108,7 +105,7 @@ java -jar target/jfs-0.1.0-SNAPSHOT.jar -token 'change-me' -addr :8080 -data ./d
 ### 3.3 后台运行
 
 ```bash
-nohup java -jar target/jfs-0.1.0-SNAPSHOT.jar \
+nohup java -jar jfs-server/target/jfs-server.jar \
   -addr :8080 \
   -data ./data \
   > jfs.log 2>&1 &
@@ -144,6 +141,35 @@ curl -s http://127.0.0.1:8080/overview
 chmod +x examples/demo.sh
 ./examples/demo.sh http://127.0.0.1:8080
 ```
+
+## CLI 文件操作
+
+`jfs-cli` 通过 HTTP 调用正在运行的 server，用来上传、下载、列表、改元数据和删除。
+
+```bash
+CLI="java -jar jfs-cli/target/jfs-cli.jar --url http://127.0.0.1:8080 --token change-me"
+
+$CLI ping
+$CLI auth
+$CLI put ./photo.jpg img/photo.jpg
+$CLI put ./secret.bin sec/secret.bin --auth
+$CLI ls -b img
+$CLI get img/photo.jpg -o ./photo.jpg
+$CLI cat img/photo.jpg
+$CLI meta img/photo.jpg --mime image/jpeg --auth 1
+$CLI rm img/photo.jpg
+$CLI overview
+$CLI stats
+```
+
+| 全局参数 | 说明 |
+|----------|------|
+| `-u, --url` | 服务地址，默认 `$JFS_URL` 或 `http://127.0.0.1:8080` |
+| `-t, --token` | 令牌，默认 `$JFS_TOKEN` |
+| `--json` | 列表也输出 JSON |
+| `-h, --help` | 帮助 |
+
+对象可以用 `-b bucket -n filename`，或一个 `bucket/name` 参数。
 
 ## 5. 管理控制台
 
