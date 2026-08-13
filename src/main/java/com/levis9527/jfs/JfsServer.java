@@ -69,9 +69,26 @@ public final class JfsServer {
     private static void printHelp() {
         System.out.println("""
                 jfs - Java small-file storage (bfs / Haystack inspired)
+
                 Usage:
-                  java -jar jfs.jar [-addr :8080] [-data ./data] [-volumes 2] [-volume-size 1073741824] [-worker 1]
-                Then open http://127.0.0.1:8080/admin
+                  java -jar jfs.jar [options]
+
+                Options:
+                  -addr HOST:PORT     listen address, default :8080
+                                      examples: :8080  127.0.0.1:8080  8080
+                  -data DIR           data root (volumes + files.jsonl), default ./data
+                  -volumes N          number of volumes, default 2
+                  -volume-size BYTES  max size per volume, default 1073741824 (1GiB)
+                  -worker ID          snowflake worker id 0..1023, default 1
+                  -h, --help          print this help
+
+                After start:
+                  GET  /ping           health
+                  GET  /admin          web console
+                  PUT  /{bucket}/{file}  upload
+                  GET  /{bucket}/{file}  download
+
+                See docs/startup.md for the full guide.
                 """);
     }
 }

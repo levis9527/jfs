@@ -25,3 +25,4 @@ curl -s "$BASE/overview"; echo
 
 echo "== admin =="
 echo "open $BASE/admin"
+echo "docs: docs/startup.md"
