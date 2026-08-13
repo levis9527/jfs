@@ -206,6 +206,8 @@ public final class Volume implements Closeable {
             VolumeState s = new VolumeState();
             s.id = id;
             s.path = dataPath.toString();
+            s.usedBytes = offset;
+            s.maxSize = maxSize;
             s.freeSpace = maxSize - offset;
             s.fileCount = needles.size();
             s.readOnly = readOnly || closed;

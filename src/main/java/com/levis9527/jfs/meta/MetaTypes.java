@@ -72,8 +72,24 @@ public final class MetaTypes {
         public int id;
         public String path;
         public long freeSpace;
+        public long usedBytes;
+        public long maxSize;
         public int fileCount;
         public boolean readOnly;
+    }
+
+    public static final class BucketStat {
+        public String name;
+        public int fileCount;
+        public long totalBytes;
+    }
+
+    public static final class Overview {
+        public int fileCount;
+        public int bucketCount;
+        public long totalBytes;
+        public java.util.List<BucketStat> buckets;
+        public java.util.List<VolumeState> volumes;
     }
 
     public static final class ApiResponse {

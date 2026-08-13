@@ -61,6 +61,12 @@ mvn -q package
 java -jar target/jfs-0.1.0-SNAPSHOT.jar -addr :8080 -data ./data -volumes 2
 ```
 
+浏览器打开控制台：http://127.0.0.1:8080/admin
+
+- 总览：文件数、bucket、对象体积、volume 占用
+- 文件与元数据：列表、搜索、预览、改文件名/MIME、下载、删除
+- 上传：选择文件写入指定 bucket
+
 ### API
 
 ```bash
@@ -74,6 +80,7 @@ curl -o out.jpg http://127.0.0.1:8080/img/photo.jpg
 # 删除 / 列表 / 状态
 curl -X DELETE http://127.0.0.1:8080/img/photo.jpg
 curl "http://127.0.0.1:8080/list?bucket=img"
+curl http://127.0.0.1:8080/overview
 curl http://127.0.0.1:8080/stats
 ```
 
@@ -87,9 +94,10 @@ src/main/java/com/levis9527/jfs/
   volume/                 volume（superblock + 内存 map）
   store/                  多 volume 管理与选卷
   directory/              元数据与上传调度
-  proxy/                  HTTP API
+  proxy/                  HTTP API + /admin 控制台
   idgen/                  snowflake key
   meta/                   公共结构体
+src/main/resources/web/   管理页面（HTML/CSS/JS）
 ```
 
 ## 与 bfs 的差异

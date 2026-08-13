@@ -1,6 +1,5 @@
 package com.levis9527.jfs.proxy;
 
-import com.google.gson.Gson;
 import com.levis9527.jfs.directory.Directory;
 import com.levis9527.jfs.directory.DirectoryException;
 import com.levis9527.jfs.meta.MetaTypes;
@@ -21,12 +20,11 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 
 /**
- * Public HTTP API (bfs proxy).
+ * Public HTTP API (bfs proxy) plus the {@code /admin} web console.
  */
 public final class ProxyServer {
     private final Directory directory;
     private final Store store;
-    private final Gson gson = new Gson();
     private HttpServer server;
 
     public ProxyServer(Directory directory, Store store) {
@@ -38,13 +36,24 @@ public final class ProxyServer {
         server = HttpServer.create(new InetSocketAddress(host, port), 0);
         server.createContext("/ping", this::ping);
         server.createContext("/stats", this::stats);
+        server.createContext("/overview", this::overview);
+        server.createContext("/buckets", this::buckets);
         server.createContext("/upload", this::upload);
         server.createContext("/get", this::get);
         server.createContext("/del", this::del);
         server.createContext("/list", this::list);
+        server.createContext("/meta", this::meta);
+        server.createContext("/admin", AdminUi::handle);
         server.createContext("/", this::restObject);
         server.setExecutor(Executors.newCachedThreadPool());
         server.start();
+    }
+
+    public int port() {
+        if (server == null) {
+            throw new IllegalStateException("server not started");
+        }
+        return server.getAddress().getPort();
     }
 
     public void stop() {
@@ -59,6 +68,14 @@ public final class ProxyServer {
 
     private void stats(HttpExchange ex) throws IOException {
         writeJson(ex, 200, MetaTypes.RET_OK, null, store.states());
+    }
+
+    private void overview(HttpExchange ex) throws IOException {
+        writeJson(ex, 200, MetaTypes.RET_OK, null, directory.overview());
+    }
+
+    private void buckets(HttpExchange ex) throws IOException {
+        writeJson(ex, 200, MetaTypes.RET_OK, null, directory.overview().buckets);
     }
 
     private void upload(HttpExchange ex) throws IOException {
@@ -94,6 +111,7 @@ public final class ProxyServer {
         String bucket = q.getOrDefault("bucket", "");
         String filename = q.getOrDefault("filename", "");
         boolean metaOnly = "1".equals(q.get("meta"));
+        boolean download = "1".equals(q.get("download"));
         try {
             var got = directory.getData(bucket, filename);
             if (metaOnly) {
@@ -105,6 +123,9 @@ public final class ProxyServer {
             h.set("Content-Type", mime == null || mime.isBlank() ? "application/octet-stream" : mime);
             h.set("X-JFS-Key", String.valueOf(got.meta().key));
             h.set("X-JFS-Vid", String.valueOf(got.meta().vid));
+            if (download) {
+                h.set("Content-Disposition", "attachment; filename=\"" + got.meta().filename + "\"");
+            }
             ex.sendResponseHeaders(200, got.data().length);
             try (OutputStream os = ex.getResponseBody()) {
                 os.write(got.data());
@@ -135,16 +156,51 @@ public final class ProxyServer {
 
     private void list(HttpExchange ex) throws IOException {
         Map<String, String> q = query(ex);
-        writeJson(ex, 200, MetaTypes.RET_OK, null, directory.list(q.get("bucket")));
+        writeJson(ex, 200, MetaTypes.RET_OK, null, directory.list(q.get("bucket"), q.get("q")));
+    }
+
+    private void meta(HttpExchange ex) throws IOException {
+        if (!"POST".equalsIgnoreCase(ex.getRequestMethod()) && !"PUT".equalsIgnoreCase(ex.getRequestMethod())) {
+            writeJson(ex, 405, MetaTypes.RET_BAD_REQUEST, "POST/PUT required", null);
+            return;
+        }
+        Map<String, String> q = query(ex);
+        String bucket = q.getOrDefault("bucket", "");
+        String filename = q.getOrDefault("filename", "");
+        String newFilename = q.get("newFilename");
+        String mime = q.containsKey("mime") ? q.get("mime") : null;
+        try {
+            var updated = directory.updateMeta(bucket, filename, newFilename, mime);
+            writeJson(ex, 200, MetaTypes.RET_OK, null, updated);
+        } catch (DirectoryException e) {
+            if (e.getMessage() != null && e.getMessage().contains("already exists")) {
+                writeJson(ex, 409, MetaTypes.RET_CONFLICT, e.getMessage(), null);
+            } else if (e.getMessage() != null && e.getMessage().contains("not found")) {
+                writeJson(ex, 404, MetaTypes.RET_NOT_FOUND, e.getMessage(), null);
+            } else {
+                writeJson(ex, 400, MetaTypes.RET_BAD_REQUEST, e.getMessage(), null);
+            }
+        } catch (Exception e) {
+            writeJson(ex, 500, MetaTypes.RET_INTERNAL, e.getMessage(), null);
+        }
     }
 
     private void restObject(HttpExchange ex) throws IOException {
         String path = ex.getRequestURI().getPath();
         if ("/".equals(path)) {
+            if ("GET".equalsIgnoreCase(ex.getRequestMethod()) && wantsHtml(ex)) {
+                ex.getResponseHeaders().set("Location", "/admin");
+                ex.sendResponseHeaders(302, -1);
+                ex.close();
+                return;
+            }
             writeJson(ex, 200, MetaTypes.RET_OK, "jfs ready", Map.of(
+                    "admin", "GET /admin",
+                    "overview", "GET /overview",
                     "upload", "POST /upload?bucket=&filename=",
                     "get", "GET /get?bucket=&filename=",
                     "del", "POST /del?bucket=&filename=",
+                    "meta", "POST /meta?bucket=&filename=&mime=&newFilename=",
                     "rest", "PUT|GET|DELETE /{bucket}/{filename}"
             ));
             return;
@@ -193,8 +249,13 @@ public final class ProxyServer {
         }
     }
 
+    private static boolean wantsHtml(HttpExchange ex) {
+        String accept = ex.getRequestHeaders().getFirst("Accept");
+        return accept != null && accept.contains("text/html");
+    }
+
     private void writeJson(HttpExchange ex, int http, int ret, String msg, Object data) throws IOException {
-        byte[] body = gson.toJson(new MetaTypes.ApiResponse(ret, msg, data)).getBytes(StandardCharsets.UTF_8);
+        byte[] body = JsonSupport.GSON.toJson(new MetaTypes.ApiResponse(ret, msg, data)).getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         ex.sendResponseHeaders(http, body.length);
         try (OutputStream os = ex.getResponseBody()) {

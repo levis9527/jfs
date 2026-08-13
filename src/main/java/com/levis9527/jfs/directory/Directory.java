@@ -2,8 +2,10 @@ package com.levis9527.jfs.directory;
 
 import com.google.gson.Gson;
 import com.levis9527.jfs.idgen.Snowflake;
+import com.levis9527.jfs.meta.MetaTypes.BucketStat;
 import com.levis9527.jfs.meta.MetaTypes.FileMeta;
 import com.levis9527.jfs.meta.MetaTypes.NeedleLoc;
+import com.levis9527.jfs.meta.MetaTypes.Overview;
 import com.levis9527.jfs.meta.MetaTypes.UploadResult;
 import com.levis9527.jfs.needle.Needle;
 import com.levis9527.jfs.store.Store;
@@ -154,15 +156,83 @@ public final class Directory implements Closeable {
     }
 
     public List<FileMeta> list(String bucket) {
+        return list(bucket, null);
+    }
+
+    public List<FileMeta> list(String bucket, String query) {
         synchronized (lock) {
             List<FileMeta> out = new ArrayList<>();
+            String q = query == null ? "" : query.toLowerCase();
             for (FileMeta fm : files.values()) {
                 if (bucket != null && !bucket.isBlank() && !bucket.equals(fm.bucket)) {
                     continue;
                 }
+                if (!q.isEmpty()) {
+                    String name = fm.filename == null ? "" : fm.filename.toLowerCase();
+                    String mime = fm.mime == null ? "" : fm.mime.toLowerCase();
+                    String key = String.valueOf(fm.key);
+                    if (!name.contains(q) && !mime.contains(q) && !key.contains(q)) {
+                        continue;
+                    }
+                }
                 out.add(fm.copy());
             }
+            out.sort((a, b) -> Long.compare(b.created, a.created));
             return out;
+        }
+    }
+
+    public FileMeta updateMeta(String bucket, String filename, String newFilename, String mime) throws IOException {
+        synchronized (lock) {
+            String k = fileKey(bucket, filename);
+            FileMeta fm = files.get(k);
+            if (fm == null || fm.deleted) {
+                throw new DirectoryException("file not found");
+            }
+            String nextName = (newFilename == null || newFilename.isBlank()) ? fm.filename : newFilename;
+            String nextMime = mime == null ? fm.mime : mime;
+            String nextKey = fileKey(bucket, nextName);
+            if (!k.equals(nextKey) && files.containsKey(nextKey)) {
+                throw new DirectoryException("file already exists");
+            }
+            FileMeta updated = fm.copy();
+            updated.filename = nextName;
+            updated.mime = nextMime;
+            if (!k.equals(nextKey)) {
+                FileMeta tomb = fm.copy();
+                tomb.deleted = true;
+                appendMeta(tomb);
+                files.remove(k);
+            }
+            appendMeta(updated);
+            files.put(nextKey, updated);
+            byKey.put(updated.key, updated);
+            return updated.copy();
+        }
+    }
+
+    public Overview overview() {
+        synchronized (lock) {
+            Overview ov = new Overview();
+            Map<String, BucketStat> buckets = new HashMap<>();
+            long total = 0;
+            for (FileMeta fm : files.values()) {
+                total += fm.size;
+                BucketStat bs = buckets.computeIfAbsent(fm.bucket, name -> {
+                    BucketStat s = new BucketStat();
+                    s.name = name;
+                    return s;
+                });
+                bs.fileCount++;
+                bs.totalBytes += fm.size;
+            }
+            ov.fileCount = files.size();
+            ov.bucketCount = buckets.size();
+            ov.totalBytes = total;
+            ov.buckets = new ArrayList<>(buckets.values());
+            ov.buckets.sort((a, b) -> a.name.compareToIgnoreCase(b.name));
+            ov.volumes = store.states();
+            return ov;
         }
     }
 

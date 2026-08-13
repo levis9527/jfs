@@ -71,6 +71,7 @@ public final class JfsServer {
                 jfs - Java small-file storage (bfs / Haystack inspired)
                 Usage:
                   java -jar jfs.jar [-addr :8080] [-data ./data] [-volumes 2] [-volume-size 1073741824] [-worker 1]
+                Then open http://127.0.0.1:8080/admin
                 """);
     }
 }
