@@ -19,3 +19,9 @@ curl -s "$BASE/get?bucket=demo&filename=sample.bin&meta=1"; echo
 
 echo "== stats =="
 curl -s "$BASE/stats"; echo
+
+echo "== overview =="
+curl -s "$BASE/overview"; echo
+
+echo "== admin =="
+echo "open $BASE/admin"
