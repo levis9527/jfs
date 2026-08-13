@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>jfs 控制台</title>
+  <link rel="stylesheet" href="/admin/app.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="mark">jfs</span>
+      <div>
+        <strong>控制台</strong>
+        <small>Haystack 小文件存储</small>
+      </div>
+    </div>
+    <nav>
+      <button class="nav-btn active" data-view="dashboard">总览</button>
+      <button class="nav-btn" data-view="files">文件与元数据</button>
+      <button class="nav-btn" data-view="volumes">Volume</button>
+    </nav>
+    <p class="hint">数据与元数据分离：store 存 needle，directory 管 bucket/filename。</p>
+    <label class="token-box">访问令牌
+      <input id="token-input" type="password" autocomplete="off" placeholder="JFS_TOKEN / -token">
+    </label>
+    <button id="token-save" class="ghost">保存令牌</button>
+    <small id="auth-status" class="hint">鉴权：检测中…</small>
+  </aside>
+
+  <main>
+    <header class="top">
+      <h1 id="page-title">总览</h1>
+      <div class="top-actions">
+        <button id="refresh-btn" class="ghost">刷新</button>
+        <button id="upload-open" class="primary">上传文件</button>
+      </div>
+    </header>
+
+    <section id="view-dashboard" class="view">
+      <div class="cards" id="stat-cards"></div>
+      <div class="panel">
+        <h2>Bucket</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>名称</th><th>文件数</th><th>占用</th></tr>
+            </thead>
+            <tbody id="bucket-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-files" class="view hidden">
+      <div class="toolbar">
+        <select id="bucket-filter">
+          <option value="">全部 bucket</option>
+        </select>
+        <input id="search" type="search" placeholder="搜索文件名 / mime / key">
+      </div>
+      <div class="panel">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>预览</th>
+                <th>Bucket</th>
+                <th>文件名</th>
+                <th>MIME</th>
+                <th>大小</th>
+                <th>Volume</th>
+                <th>Key</th>
+                <th>权限</th>
+                <th>创建时间</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="file-body"></tbody>
+          </table>
+        </div>
+        <p id="file-empty" class="empty hidden">没有匹配的文件</p>
+      </div>
+    </section>
+
+    <section id="view-volumes" class="view hidden">
+      <div id="volume-list" class="volume-grid"></div>
+    </section>
+  </main>
+
+  <div id="drawer" class="drawer hidden">
+    <div class="drawer-panel">
+      <header>
+        <h2>文件详情</h2>
+        <button id="drawer-close" class="ghost">关闭</button>
+      </header>
+      <div id="preview" class="preview"></div>
+      <dl id="meta-dl" class="meta"></dl>
+      <form id="meta-form" class="meta-form">
+        <label>文件名
+          <input name="newFilename" required>
+        </label>
+        <label>MIME
+          <input name="mime">
+        </label>
+        <label class="check">
+          <input type="checkbox" name="auth">
+          读取需要鉴权
+        </label>
+        <div class="row">
+          <button type="submit" class="primary">保存元数据</button>
+          <a id="download-link" class="ghost" href="#">下载</a>
+          <button type="button" id="delete-btn" class="danger">删除</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="upload-modal" class="modal hidden">
+    <form id="upload-form" class="modal-panel">
+      <h2>上传文件</h2>
+      <label>Bucket
+        <input name="bucket" value="default" required>
+      </label>
+      <label>文件名（可改）
+        <input name="filename">
+      </label>
+      <label>MIME（可改）
+        <input name="mime">
+      </label>
+      <label class="check">
+        <input type="checkbox" name="auth">
+        读取需要鉴权（私有文件）
+      </label>
+      <label class="drop" id="drop">
+        <input id="file-input" type="file" required>
+        <span id="drop-label">选择或拖入文件</span>
+      </label>
+      <div class="row">
+        <button type="submit" class="primary">开始上传</button>
+        <button type="button" id="upload-cancel" class="ghost">取消</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/admin/app.js"></script>
+</body>
+</html>
