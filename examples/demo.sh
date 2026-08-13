@@ -25,4 +25,5 @@ curl -s "$BASE/overview"; echo
 
 echo "== admin =="
 echo "open $BASE/admin"
+echo "auth: GET $BASE/auth  (set -token to enforce per-file auth)"
 echo "docs: docs/startup.md"

@@ -9,6 +9,7 @@ public final class MetaTypes {
 
     public static final int RET_OK = 1;
     public static final int RET_BAD_REQUEST = 400;
+    public static final int RET_UNAUTHORIZED = 401;
     public static final int RET_NOT_FOUND = 404;
     public static final int RET_CONFLICT = 409;
     public static final int RET_INTERNAL = 500;
@@ -42,6 +43,8 @@ public final class MetaTypes {
         public int size;
         public long created;
         public boolean deleted;
+        /** When true, reading this object requires the server token. */
+        public boolean auth;
 
         public FileMeta copy() {
             FileMeta c = new FileMeta();
@@ -54,6 +57,7 @@ public final class MetaTypes {
             c.size = size;
             c.created = created;
             c.deleted = deleted;
+            c.auth = auth;
             return c;
         }
     }
@@ -66,6 +70,7 @@ public final class MetaTypes {
         public int vid;
         public int size;
         public String url;
+        public boolean auth;
     }
 
     public static final class VolumeState {

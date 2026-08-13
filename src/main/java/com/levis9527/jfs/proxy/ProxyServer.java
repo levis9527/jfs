@@ -3,6 +3,7 @@ package com.levis9527.jfs.proxy;
 import com.levis9527.jfs.directory.Directory;
 import com.levis9527.jfs.directory.DirectoryException;
 import com.levis9527.jfs.meta.MetaTypes;
+import com.levis9527.jfs.meta.MetaTypes.FileMeta;
 import com.levis9527.jfs.store.Store;
 
 import com.sun.net.httpserver.Headers;
@@ -16,6 +17,7 @@ import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 
@@ -25,16 +27,23 @@ import java.util.concurrent.Executors;
 public final class ProxyServer {
     private final Directory directory;
     private final Store store;
+    private final AccessControl access;
     private HttpServer server;
 
     public ProxyServer(Directory directory, Store store) {
+        this(directory, store, null);
+    }
+
+    public ProxyServer(Directory directory, Store store, String token) {
         this.directory = directory;
         this.store = store;
+        this.access = new AccessControl(token);
     }
 
     public void start(String host, int port) throws IOException {
         server = HttpServer.create(new InetSocketAddress(host, port), 0);
         server.createContext("/ping", this::ping);
+        server.createContext("/auth", this::authInfo);
         server.createContext("/stats", this::stats);
         server.createContext("/overview", this::overview);
         server.createContext("/buckets", this::buckets);
@@ -66,16 +75,35 @@ public final class ProxyServer {
         writeJson(ex, 200, MetaTypes.RET_OK, "pong", null);
     }
 
+    private void authInfo(HttpExchange ex) throws IOException {
+        writeJson(ex, 200, MetaTypes.RET_OK, null, Map.of("enabled", access.enabled()));
+    }
+
     private void stats(HttpExchange ex) throws IOException {
-        writeJson(ex, 200, MetaTypes.RET_OK, null, store.states());
+        try {
+            requireToken(ex, query(ex));
+            writeJson(ex, 200, MetaTypes.RET_OK, null, store.states());
+        } catch (UnauthorizedException e) {
+            unauthorized(ex);
+        }
     }
 
     private void overview(HttpExchange ex) throws IOException {
-        writeJson(ex, 200, MetaTypes.RET_OK, null, directory.overview());
+        try {
+            requireToken(ex, query(ex));
+            writeJson(ex, 200, MetaTypes.RET_OK, null, directory.overview());
+        } catch (UnauthorizedException e) {
+            unauthorized(ex);
+        }
     }
 
     private void buckets(HttpExchange ex) throws IOException {
-        writeJson(ex, 200, MetaTypes.RET_OK, null, directory.overview().buckets);
+        try {
+            requireToken(ex, query(ex));
+            writeJson(ex, 200, MetaTypes.RET_OK, null, directory.overview().buckets);
+        } catch (UnauthorizedException e) {
+            unauthorized(ex);
+        }
     }
 
     private void upload(HttpExchange ex) throws IOException {
@@ -84,16 +112,21 @@ public final class ProxyServer {
             return;
         }
         Map<String, String> q = query(ex);
-        String bucket = q.getOrDefault("bucket", "");
-        String filename = q.getOrDefault("filename", "");
-        String mime = q.getOrDefault("mime", "");
-        byte[] data = readBody(ex);
-        doUpload(ex, bucket, filename, mime, data);
+        try {
+            requireToken(ex, q);
+            String bucket = q.getOrDefault("bucket", "");
+            String filename = q.getOrDefault("filename", "");
+            String mime = q.getOrDefault("mime", "");
+            boolean auth = AccessControl.parseFlag(q.get("auth"));
+            doUpload(ex, bucket, filename, mime, readBody(ex), auth);
+        } catch (UnauthorizedException e) {
+            unauthorized(ex);
+        }
     }
 
-    private void doUpload(HttpExchange ex, String bucket, String filename, String mime, byte[] data) throws IOException {
+    private void doUpload(HttpExchange ex, String bucket, String filename, String mime, byte[] data, boolean auth) throws IOException {
         try {
-            var res = directory.upload(bucket, filename, mime, data);
+            var res = directory.upload(bucket, filename, mime, data, auth);
             writeJson(ex, 200, MetaTypes.RET_OK, null, res);
         } catch (DirectoryException e) {
             if (e.getMessage() != null && e.getMessage().contains("already exists")) {
@@ -113,16 +146,19 @@ public final class ProxyServer {
         boolean metaOnly = "1".equals(q.get("meta"));
         boolean download = "1".equals(q.get("download"));
         try {
-            var got = directory.getData(bucket, filename);
+            FileMeta meta = directory.getMeta(bucket, filename);
+            requireFileRead(ex, q, meta);
             if (metaOnly) {
-                writeJson(ex, 200, MetaTypes.RET_OK, null, got.meta());
+                writeJson(ex, 200, MetaTypes.RET_OK, null, meta);
                 return;
             }
+            var got = directory.getData(bucket, filename);
             Headers h = ex.getResponseHeaders();
             String mime = got.meta().mime;
             h.set("Content-Type", mime == null || mime.isBlank() ? "application/octet-stream" : mime);
             h.set("X-JFS-Key", String.valueOf(got.meta().key));
             h.set("X-JFS-Vid", String.valueOf(got.meta().vid));
+            h.set("X-JFS-Auth", got.meta().auth ? "1" : "0");
             if (download) {
                 h.set("Content-Disposition", "attachment; filename=\"" + got.meta().filename + "\"");
             }
@@ -130,6 +166,8 @@ public final class ProxyServer {
             try (OutputStream os = ex.getResponseBody()) {
                 os.write(got.data());
             }
+        } catch (UnauthorizedException e) {
+            unauthorized(ex);
         } catch (DirectoryException e) {
             writeJson(ex, 404, MetaTypes.RET_NOT_FOUND, e.getMessage(), null);
         } catch (Exception e) {
@@ -145,8 +183,11 @@ public final class ProxyServer {
         }
         Map<String, String> q = query(ex);
         try {
+            requireToken(ex, q);
             directory.delete(q.getOrDefault("bucket", ""), q.getOrDefault("filename", ""));
             writeJson(ex, 200, MetaTypes.RET_OK, "deleted", null);
+        } catch (UnauthorizedException e) {
+            unauthorized(ex);
         } catch (DirectoryException e) {
             writeJson(ex, 404, MetaTypes.RET_NOT_FOUND, e.getMessage(), null);
         } catch (Exception e) {
@@ -156,7 +197,12 @@ public final class ProxyServer {
 
     private void list(HttpExchange ex) throws IOException {
         Map<String, String> q = query(ex);
-        writeJson(ex, 200, MetaTypes.RET_OK, null, directory.list(q.get("bucket"), q.get("q")));
+        List<FileMeta> files = directory.list(q.get("bucket"), q.get("q"));
+        boolean privileged = access.authorized(ex, q);
+        if (access.enabled() && !privileged) {
+            files.removeIf(f -> f.auth);
+        }
+        writeJson(ex, 200, MetaTypes.RET_OK, null, files);
     }
 
     private void meta(HttpExchange ex) throws IOException {
@@ -165,13 +211,17 @@ public final class ProxyServer {
             return;
         }
         Map<String, String> q = query(ex);
-        String bucket = q.getOrDefault("bucket", "");
-        String filename = q.getOrDefault("filename", "");
-        String newFilename = q.get("newFilename");
-        String mime = q.containsKey("mime") ? q.get("mime") : null;
         try {
-            var updated = directory.updateMeta(bucket, filename, newFilename, mime);
+            requireToken(ex, q);
+            String bucket = q.getOrDefault("bucket", "");
+            String filename = q.getOrDefault("filename", "");
+            String newFilename = q.get("newFilename");
+            String mime = q.containsKey("mime") ? q.get("mime") : null;
+            Boolean auth = AccessControl.parseOptionalFlag(q.get("auth"));
+            var updated = directory.updateMeta(bucket, filename, newFilename, mime, auth);
             writeJson(ex, 200, MetaTypes.RET_OK, null, updated);
+        } catch (UnauthorizedException e) {
+            unauthorized(ex);
         } catch (DirectoryException e) {
             if (e.getMessage() != null && e.getMessage().contains("already exists")) {
                 writeJson(ex, 409, MetaTypes.RET_CONFLICT, e.getMessage(), null);
@@ -187,6 +237,7 @@ public final class ProxyServer {
 
     private void restObject(HttpExchange ex) throws IOException {
         String path = ex.getRequestURI().getPath();
+        Map<String, String> q = query(ex);
         if ("/".equals(path)) {
             if ("GET".equalsIgnoreCase(ex.getRequestMethod()) && wantsHtml(ex)) {
                 ex.getResponseHeaders().set("Location", "/admin");
@@ -197,11 +248,12 @@ public final class ProxyServer {
             writeJson(ex, 200, MetaTypes.RET_OK, "jfs ready", Map.of(
                     "admin", "GET /admin",
                     "overview", "GET /overview",
-                    "upload", "POST /upload?bucket=&filename=",
+                    "upload", "POST /upload?bucket=&filename=&auth=0|1",
                     "get", "GET /get?bucket=&filename=",
                     "del", "POST /del?bucket=&filename=",
-                    "meta", "POST /meta?bucket=&filename=&mime=&newFilename=",
-                    "rest", "PUT|GET|DELETE /{bucket}/{filename}"
+                    "meta", "POST /meta?bucket=&filename=&mime=&newFilename=&auth=0|1",
+                    "rest", "PUT|GET|DELETE /{bucket}/{filename}",
+                    "auth", access.enabled()
             ));
             return;
         }
@@ -216,19 +268,31 @@ public final class ProxyServer {
         String method = ex.getRequestMethod();
         switch (method) {
             case "PUT", "POST" -> {
-                String mime = ex.getRequestHeaders().getFirst("Content-Type");
-                doUpload(ex, bucket, filename, mime, readBody(ex));
+                try {
+                    requireToken(ex, q);
+                    String mime = ex.getRequestHeaders().getFirst("Content-Type");
+                    boolean auth = AccessControl.parseFlag(firstNonBlank(q.get("auth"),
+                            ex.getRequestHeaders().getFirst("X-JFS-Auth")));
+                    doUpload(ex, bucket, filename, mime, readBody(ex), auth);
+                } catch (UnauthorizedException e) {
+                    unauthorized(ex);
+                }
             }
             case "GET" -> {
                 try {
+                    FileMeta meta = directory.getMeta(bucket, filename);
+                    requireFileRead(ex, q, meta);
                     var got = directory.getData(bucket, filename);
                     Headers h = ex.getResponseHeaders();
                     String mime = got.meta().mime;
                     h.set("Content-Type", mime == null || mime.isBlank() ? "application/octet-stream" : mime);
+                    h.set("X-JFS-Auth", got.meta().auth ? "1" : "0");
                     ex.sendResponseHeaders(200, got.data().length);
                     try (OutputStream os = ex.getResponseBody()) {
                         os.write(got.data());
                     }
+                } catch (UnauthorizedException e) {
+                    unauthorized(ex);
                 } catch (DirectoryException e) {
                     writeJson(ex, 404, MetaTypes.RET_NOT_FOUND, e.getMessage(), null);
                 } catch (Exception e) {
@@ -237,8 +301,11 @@ public final class ProxyServer {
             }
             case "DELETE" -> {
                 try {
+                    requireToken(ex, q);
                     directory.delete(bucket, filename);
                     writeJson(ex, 200, MetaTypes.RET_OK, "deleted", null);
+                } catch (UnauthorizedException e) {
+                    unauthorized(ex);
                 } catch (DirectoryException e) {
                     writeJson(ex, 404, MetaTypes.RET_NOT_FOUND, e.getMessage(), null);
                 } catch (Exception e) {
@@ -247,6 +314,23 @@ public final class ProxyServer {
             }
             default -> writeJson(ex, 405, MetaTypes.RET_BAD_REQUEST, "method not allowed", null);
         }
+    }
+
+    private void requireToken(HttpExchange ex, Map<String, String> query) {
+        if (!access.authorized(ex, query)) {
+            throw new UnauthorizedException();
+        }
+    }
+
+    private void requireFileRead(HttpExchange ex, Map<String, String> query, FileMeta meta) {
+        if (meta.auth && !access.authorized(ex, query)) {
+            throw new UnauthorizedException();
+        }
+    }
+
+    private void unauthorized(HttpExchange ex) throws IOException {
+        ex.getResponseHeaders().set("WWW-Authenticate", "Bearer realm=\"jfs\"");
+        writeJson(ex, 401, MetaTypes.RET_UNAUTHORIZED, "unauthorized", null);
     }
 
     private static boolean wantsHtml(HttpExchange ex) {
@@ -288,5 +372,12 @@ public final class ProxyServer {
 
     private static String urlDecode(String s) {
         return URLDecoder.decode(s, StandardCharsets.UTF_8);
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) {
+            return a;
+        }
+        return b;
     }
 }

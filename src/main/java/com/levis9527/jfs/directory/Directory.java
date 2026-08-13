@@ -81,6 +81,10 @@ public final class Directory implements Closeable {
     }
 
     public UploadResult upload(String bucket, String filename, String mime, byte[] data) throws IOException {
+        return upload(bucket, filename, mime, data, false);
+    }
+
+    public UploadResult upload(String bucket, String filename, String mime, byte[] data, boolean auth) throws IOException {
         if (bucket == null || bucket.isBlank() || filename == null || filename.isBlank()) {
             throw new DirectoryException("bucket and filename required");
         }
@@ -104,6 +108,7 @@ public final class Directory implements Closeable {
             fm.vid = loc.vid;
             fm.size = data.length;
             fm.created = System.currentTimeMillis() / 1000L;
+            fm.auth = auth;
             appendMeta(fm);
             files.put(k, fm);
             byKey.put(key, fm);
@@ -116,6 +121,7 @@ public final class Directory implements Closeable {
             r.vid = loc.vid;
             r.size = fm.size;
             r.url = "/" + bucket + "/" + filename;
+            r.auth = auth;
             return r;
         }
     }
@@ -183,6 +189,10 @@ public final class Directory implements Closeable {
     }
 
     public FileMeta updateMeta(String bucket, String filename, String newFilename, String mime) throws IOException {
+        return updateMeta(bucket, filename, newFilename, mime, null);
+    }
+
+    public FileMeta updateMeta(String bucket, String filename, String newFilename, String mime, Boolean auth) throws IOException {
         synchronized (lock) {
             String k = fileKey(bucket, filename);
             FileMeta fm = files.get(k);
@@ -198,6 +208,9 @@ public final class Directory implements Closeable {
             FileMeta updated = fm.copy();
             updated.filename = nextName;
             updated.mime = nextMime;
+            if (auth != null) {
+                updated.auth = auth;
+            }
             if (!k.equals(nextKey)) {
                 FileMeta tomb = fm.copy();
                 tomb.deleted = true;

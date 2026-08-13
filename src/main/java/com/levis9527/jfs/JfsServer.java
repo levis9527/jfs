@@ -16,6 +16,7 @@ public final class JfsServer {
         int volumes = 2;
         long volumeSize = 1L << 30;
         long workerId = 1;
+        String token = System.getenv("JFS_TOKEN");
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -24,6 +25,7 @@ public final class JfsServer {
                 case "-volumes" -> volumes = Integer.parseInt(args[++i]);
                 case "-volume-size" -> volumeSize = Long.parseLong(args[++i]);
                 case "-worker" -> workerId = Long.parseLong(args[++i]);
+                case "-token" -> token = args[++i];
                 case "-h", "--help" -> {
                     printHelp();
                     return;
@@ -46,9 +48,14 @@ public final class JfsServer {
 
         Store store = new Store(data, volumes, volumeSize);
         Directory directory = new Directory(data, store, workerId);
-        ProxyServer proxy = new ProxyServer(directory, store);
+        ProxyServer proxy = new ProxyServer(directory, store, token);
         proxy.start(host, port);
-        System.out.printf("jfs listening on %s:%d (data=%s volumes=%d)%n", host, port, data.toAbsolutePath(), volumes);
+        boolean authOn = token != null && !token.isBlank();
+        System.out.printf("jfs listening on %s:%d (data=%s volumes=%d auth=%s)%n",
+                host, port, data.toAbsolutePath(), volumes, authOn ? "on" : "off");
+        if (!authOn) {
+            System.out.println("warning: no -token/JFS_TOKEN; per-file auth flags are stored but not enforced");
+        }
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("shutting down...");
@@ -80,13 +87,15 @@ public final class JfsServer {
                   -volumes N          number of volumes, default 2
                   -volume-size BYTES  max size per volume, default 1073741824 (1GiB)
                   -worker ID          snowflake worker id 0..1023, default 1
+                  -token SECRET       API token (or env JFS_TOKEN). Enables per-file auth
                   -h, --help          print this help
 
                 After start:
                   GET  /ping           health
+                  GET  /auth           whether token auth is enabled
                   GET  /admin          web console
-                  PUT  /{bucket}/{file}  upload
-                  GET  /{bucket}/{file}  download
+                  PUT  /{bucket}/{file}?auth=0|1  upload (auth=1 => private)
+                  GET  /{bucket}/{file}  download (private files need token)
 
                 See docs/startup.md for the full guide.
                 """);

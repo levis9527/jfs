@@ -21,6 +21,11 @@
       <button class="nav-btn" data-view="volumes">Volume</button>
     </nav>
     <p class="hint">数据与元数据分离：store 存 needle，directory 管 bucket/filename。</p>
+    <label class="token-box">访问令牌
+      <input id="token-input" type="password" autocomplete="off" placeholder="JFS_TOKEN / -token">
+    </label>
+    <button id="token-save" class="ghost">保存令牌</button>
+    <small id="auth-status" class="hint">鉴权：检测中…</small>
   </aside>
 
   <main>
@@ -66,6 +71,7 @@
                 <th>大小</th>
                 <th>Volume</th>
                 <th>Key</th>
+                <th>权限</th>
                 <th>创建时间</th>
                 <th></th>
               </tr>
@@ -97,6 +103,10 @@
         <label>MIME
           <input name="mime">
         </label>
+        <label class="check">
+          <input type="checkbox" name="auth">
+          读取需要鉴权
+        </label>
         <div class="row">
           <button type="submit" class="primary">保存元数据</button>
           <a id="download-link" class="ghost" href="#">下载</a>
@@ -117,6 +127,10 @@
       </label>
       <label>MIME（可改）
         <input name="mime">
+      </label>
+      <label class="check">
+        <input type="checkbox" name="auth">
+        读取需要鉴权（私有文件）
       </label>
       <label class="drop" id="drop">
         <input id="file-input" type="file" required>

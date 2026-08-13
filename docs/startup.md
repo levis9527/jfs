@@ -81,6 +81,7 @@ java -jar target/jfs-0.1.0-SNAPSHOT.jar --help
 | `-volumes` | `2` | volume 数量，启动时按 `1..N` 创建/打开 |
 | `-volume-size` | `1073741824`（1 GiB） | 单个 volume 最大字节数 |
 | `-worker` | `1` | snowflake worker id，范围 `0..1023`，多实例时必须不同 |
+| `-token` | 空 / 环境变量 `JFS_TOKEN` | 访问令牌。配置后才真正校验「需要鉴权」的文件 |
 | `-h` / `--help` | — | 打印帮助后退出 |
 
 示例：
@@ -97,8 +98,9 @@ java -jar target/jfs-0.1.0-SNAPSHOT.jar \
 # 仅本机可访问
 java -jar target/jfs-0.1.0-SNAPSHOT.jar -addr 127.0.0.1:8080 -data /var/lib/jfs
 
-# 更多 volume、更大单卷
-java -jar target/jfs-0.1.0-SNAPSHOT.jar -volumes 4 -volume-size 32212254720
+# 开启按文件鉴权（推荐生产）
+java -jar target/jfs-0.1.0-SNAPSHOT.jar -token 'change-me' -addr :8080 -data ./data
+# 或：export JFS_TOKEN=change-me
 ```
 
 `configs/jfs.conf` 只是参数备忘，**进程不会自动读取该文件**，所有选项都通过命令行传入。
@@ -187,7 +189,56 @@ data/
 { "ret": 1, "msg": "...", "data": ... }
 ```
 
-`ret`：`1` 成功；`400` 参数错误；`404` 不存在；`409` 文件已存在；`500` 内部错误。
+`ret`：`1` 成功；`400` 参数错误；`401` 未授权；`404` 不存在；`409` 文件已存在；`500` 内部错误。
+
+### 7.0 按文件鉴权
+
+每个对象有 `auth` 字段（默认 `false` = 公开）：
+
+| 对象 `auth` | 未带令牌读内容 | 带令牌读内容 |
+|-------------|----------------|--------------|
+| `false` 公开 | 允许 | 允许 |
+| `true` 鉴权 | HTTP 401 | 允许 |
+
+配置了 `-token` / `JFS_TOKEN` 之后：
+
+- **上传、删除、改元数据、overview/stats** 一律要令牌
+- **匿名 `/list`** 只返回公开文件；带令牌可看到私有文件
+- `/ping`、`/auth`、`/admin` 静态页始终公开
+
+未配置令牌时：`auth` 仍会写入元数据，但**不会强制校验**（启动日志会警告）。
+
+传递令牌（任选其一）：
+
+```bash
+# Header
+curl -H 'Authorization: Bearer change-me' ...
+curl -H 'X-JFS-Token: change-me' ...
+
+# Query（方便 <img> / 下载链接）
+curl 'http://127.0.0.1:8080/sec/a.jpg?token=change-me'
+```
+
+上传时选择是否鉴权：
+
+```bash
+# 公开
+curl -X PUT --data-binary @a.jpg -H 'Content-Type: image/jpeg' \
+  -H 'Authorization: Bearer change-me' \
+  'http://127.0.0.1:8080/img/a.jpg?auth=0'
+
+# 私有（读也要令牌）
+curl -X PUT --data-binary @secret.jpg -H 'Content-Type: image/jpeg' \
+  -H 'Authorization: Bearer change-me' \
+  -H 'X-JFS-Auth: 1' \
+  http://127.0.0.1:8080/sec/secret.jpg
+
+# 以后改成公开或私有
+curl -X POST -H 'Authorization: Bearer change-me' \
+  'http://127.0.0.1:8080/meta?bucket=sec&filename=secret.jpg&auth=0'
+```
+
+管理页左侧可填写令牌（保存在浏览器 localStorage），上传/详情里可勾选「读取需要鉴权」。
 
 ### 7.1 资源路径（推荐）
 
@@ -227,17 +278,18 @@ curl -X DELETE http://127.0.0.1:8080/img/photo.jpg
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/ping` | 探活 |
-| `GET` | `/overview` | 文件/bucket/volume 汇总 |
-| `GET` | `/stats` | 仅 volume 状态 |
-| `GET` | `/buckets` | bucket 列表及占用 |
-| `GET` | `/list?bucket=&q=` | 列文件；`q` 匹配文件名、mime、key |
-| `POST` | `/upload?bucket=&filename=&mime=` | 请求体为原始字节 |
-| `GET` | `/get?bucket=&filename=` | 下载文件 |
+| `GET` | `/ping` | 探活（无需令牌） |
+| `GET` | `/auth` | `{enabled:true/false}` 是否配置了服务令牌 |
+| `GET` | `/overview` | 文件/bucket/volume 汇总（需令牌，若已配置） |
+| `GET` | `/stats` | 仅 volume 状态（需令牌，若已配置） |
+| `GET` | `/buckets` | bucket 列表及占用（需令牌，若已配置） |
+| `GET` | `/list?bucket=&q=` | 列文件；匿名只看公开文件 |
+| `POST` | `/upload?bucket=&filename=&mime=&auth=0\|1` | 请求体为原始字节 |
+| `GET` | `/get?bucket=&filename=` | 下载；`auth=true` 的对象需令牌 |
 | `GET` | `/get?bucket=&filename=&meta=1` | 只返回元数据 JSON |
 | `GET` | `/get?bucket=&filename=&download=1` | 带 `Content-Disposition` 附件下载 |
 | `POST`/`DELETE` | `/del?bucket=&filename=` | 删除 |
-| `POST`/`PUT` | `/meta?bucket=&filename=&newFilename=&mime=` | 改文件名和/或 MIME（不改文件内容） |
+| `POST`/`PUT` | `/meta?bucket=&filename=&newFilename=&mime=&auth=0\|1` | 改文件名 / MIME / 是否鉴权 |
 | `GET` | `/admin` | Web 控制台 |
 
 示例：
@@ -276,6 +328,7 @@ curl -X POST "http://127.0.0.1:8080/del?bucket=img&filename=cover.jpg"
 | `size` | 原始字节数 |
 | `created` | Unix 秒 |
 | `deleted` | 删除标记（列表接口不会返回已删对象） |
+| `auth` | `true` 表示读取需要令牌；`false` 公开 |
 
 物理数据在对应 volume 的 `.dat` 中，按 needle 追加写入。
 
@@ -295,6 +348,12 @@ curl -X POST "http://127.0.0.1:8080/del?bucket=img&filename=cover.jpg"
 
 **worker id**  
 单机保持默认即可。若以后拆多进程写同一逻辑集群，不同进程使用不同 `-worker`，避免 key 冲突。
+
+**`unauthorized` / HTTP 401**  
+配置了 `-token` 后，管理接口和 `auth=true` 的文件读取都要带令牌。公开文件（`auth=false`）仍可匿名下载。
+
+**未配置 `-token` 时私有标记不生效**  
+`auth=true` 会写进元数据，但没有服务令牌就无法校验，启动日志会提示。
 
 **上传大小**  
 当前 HTTP 层会把请求体读入内存，适合图片等小文件，不适合超大对象。

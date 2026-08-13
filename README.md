@@ -83,7 +83,7 @@ java -jar target/jfs-0.1.0-SNAPSHOT.jar \
 成功日志：
 
 ```text
-jfs listening on 0.0.0.0:8080 (data=.../data volumes=2)
+jfs listening on 0.0.0.0:8080 (data=.../data volumes=2 auth=off)
 ```
 
 | 参数 | 默认 | 说明 |
@@ -93,6 +93,7 @@ jfs listening on 0.0.0.0:8080 (data=.../data volumes=2)
 | `-volumes` | `2` | volume 个数 |
 | `-volume-size` | `1073741824` | 单卷最大字节（默认 1 GiB） |
 | `-worker` | `1` | snowflake worker id（0–1023） |
+| `-token` | 空 / `JFS_TOKEN` | 令牌；配置后可按文件选择是否鉴权 |
 | `-h` / `--help` | | 打印帮助 |
 
 `configs/jfs.conf` 只是参数备忘，**不会被自动加载**。
@@ -113,19 +114,28 @@ curl -s http://127.0.0.1:8080/ping
 （访问 `/` 且 Accept 为 HTML 时会跳转到 `/admin`）
 
 - **总览**：文件数、bucket、对象体积、volume 占用
-- **文件与元数据**：列表、搜索、预览、改文件名/MIME、下载、删除
-- **上传**：选择文件写入指定 bucket
+- **文件与元数据**：列表、搜索、预览、公开/鉴权、改文件名/MIME、下载、删除
+- **上传**：选择文件写入指定 bucket，可勾选「读取需要鉴权」
+- **令牌**：侧栏填写 `-token`，用于管理接口和私有文件预览
 
 ## HTTP API 速查
 
 JSON 包装：`{"ret":1,"msg":"...","data":...}`。`ret=1` 表示成功。
 
 ```bash
-# 上传 / 下载 / 删除（REST）
+# 公开上传 / 下载 / 删除（未开 -token 时）
 curl -X PUT --data-binary @photo.jpg -H 'Content-Type: image/jpeg' \
   http://127.0.0.1:8080/img/photo.jpg
 curl -o out.jpg http://127.0.0.1:8080/img/photo.jpg
 curl -X DELETE http://127.0.0.1:8080/img/photo.jpg
+
+# 开启 -token 后：私有上传与读取
+curl -X PUT --data-binary @secret.jpg -H 'Content-Type: image/jpeg' \
+  -H 'Authorization: Bearer change-me' \
+  'http://127.0.0.1:8080/sec/secret.jpg?auth=1'
+curl -H 'Authorization: Bearer change-me' -o secret.jpg \
+  http://127.0.0.1:8080/sec/secret.jpg
+```
 
 # 列表、总览、改元数据
 curl "http://127.0.0.1:8080/list?bucket=img"

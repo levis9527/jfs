@@ -27,6 +27,7 @@ final class JsonSupport {
                 o.addProperty("size", src.size);
                 o.addProperty("created", src.created);
                 o.addProperty("deleted", src.deleted);
+                o.addProperty("auth", src.auth);
                 return o;
             })
             .registerTypeAdapter(UploadResult.class, (JsonSerializer<UploadResult>) (src, type, ctx) -> {
@@ -38,6 +39,7 @@ final class JsonSupport {
                 o.addProperty("vid", src.vid);
                 o.addProperty("size", src.size);
                 o.addProperty("url", src.url);
+                o.addProperty("auth", src.auth);
                 return o;
             })
             .create();

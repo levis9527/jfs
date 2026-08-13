@@ -75,6 +75,24 @@ class DirectoryTest {
     }
 
     @Test
+    void authFlagPersistsAndCanToggle() throws Exception {
+        Path storeDir = temp.resolve("store-auth");
+        Path metaDir = temp.resolve("meta-auth");
+        try (Store st = new Store(storeDir, 1, 1 << 20);
+             Directory dir = new Directory(metaDir, st, 5)) {
+            var up = dir.upload("sec", "secret.bin", "application/octet-stream", "hidden".getBytes(), true);
+            assertTrue(up.auth);
+            assertTrue(dir.getMeta("sec", "secret.bin").auth);
+            var toggled = dir.updateMeta("sec", "secret.bin", null, null, false);
+            assertTrue(!toggled.auth);
+        }
+        try (Store st2 = new Store(storeDir, 1, 1 << 20);
+             Directory dir2 = new Directory(metaDir, st2, 5)) {
+            assertTrue(!dir2.getMeta("sec", "secret.bin").auth);
+        }
+    }
+
+    @Test
     void renamePersistsAcrossRestart() throws Exception {
         Path storeDir = temp.resolve("store2");
         Path metaDir = temp.resolve("meta2");

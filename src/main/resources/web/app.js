@@ -1,12 +1,23 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
+const TOKEN_KEY = "jfs.token";
 
 const state = {
   view: "dashboard",
   overview: null,
   files: [],
   current: null,
+  authEnabled: false,
 };
+
+function savedToken() {
+  return localStorage.getItem(TOKEN_KEY) || "";
+}
+
+function authHeaders() {
+  const token = savedToken();
+  return token ? { Authorization: "Bearer " + token } : {};
+}
 
 function toast(msg) {
   const el = $("#toast");
@@ -16,13 +27,16 @@ function toast(msg) {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, opts);
+  const headers = Object.assign({}, authHeaders(), opts.headers || {});
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
   const type = res.headers.get("content-type") || "";
   if (!type.includes("application/json")) {
+    if (res.status === 401) throw new Error("需要访问令牌");
     if (!res.ok) throw new Error("请求失败 " + res.status);
     return res;
   }
   const json = await res.json();
+  if (json.ret === 401) throw new Error("需要访问令牌");
   if (json.ret !== 1) throw new Error(json.msg || "请求失败");
   return json.data;
 }
@@ -48,6 +62,8 @@ function isImage(mime, name) {
 function fileUrl(file, extra = "") {
   const q = new URLSearchParams({ bucket: file.bucket, filename: file.filename });
   if (extra) q.set(extra, "1");
+  const token = savedToken();
+  if (file.auth && token) q.set("token", token);
   return "/get?" + q.toString();
 }
 
@@ -98,6 +114,9 @@ function renderFiles() {
     const thumb = isImage(f.mime, f.filename)
       ? `<img class="thumb" src="${fileUrl(f)}" alt="">`
       : `<span class="mono">·</span>`;
+    const perm = f.auth
+      ? `<span class="badge private">鉴权</span>`
+      : `<span class="badge">公开</span>`;
     return `<tr>
       <td>${thumb}</td>
       <td>${esc(f.bucket)}</td>
@@ -106,6 +125,7 @@ function renderFiles() {
       <td>${fmtBytes(f.size)}</td>
       <td>${f.vid}</td>
       <td class="mono">${esc(String(f.key))}</td>
+      <td>${perm}</td>
       <td>${fmtTime(f.created)}</td>
       <td><button class="ghost" data-bucket="${esc(f.bucket)}" data-filename="${esc(f.filename)}">详情</button></td>
     </tr>`;
@@ -144,10 +164,12 @@ function openFile(bucket, filename) {
     ["vid", file.vid],
     ["key", file.key],
     ["cookie", file.cookie],
+    ["auth", file.auth ? "读取需令牌" : "公开"],
     ["created", fmtTime(file.created)],
   ].map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("");
   $("#meta-form").newFilename.value = file.filename;
   $("#meta-form").mime.value = file.mime || "";
+  $("#meta-form").auth.checked = !!file.auth;
   $("#download-link").href = fileUrl(file, "download");
 }
 
@@ -163,6 +185,13 @@ async function loadAll() {
   renderFiles();
 }
 
+function setAuthStatus(enabled) {
+  state.authEnabled = enabled;
+  $("#auth-status").textContent = enabled
+    ? "服务已开启鉴权：公开文件可匿名读，私有文件和管理接口需要令牌"
+    : "服务未配置令牌：auth 标记会保存，但不会强制校验";
+}
+
 $$(".nav-btn").forEach((btn) => btn.addEventListener("click", () => setView(btn.dataset.view)));
 $("#refresh-btn").addEventListener("click", () => loadAll().catch((e) => toast(e.message)));
 $("#bucket-filter").addEventListener("change", () => loadAll().catch((e) => toast(e.message)));
@@ -171,6 +200,13 @@ $("#search").addEventListener("input", debounce(() => loadAll().catch((e) => toa
 $("#drawer-close").addEventListener("click", () => $("#drawer").classList.add("hidden"));
 $("#upload-open").addEventListener("click", () => $("#upload-modal").classList.remove("hidden"));
 $("#upload-cancel").addEventListener("click", () => $("#upload-modal").classList.add("hidden"));
+
+$("#token-input").value = savedToken();
+$("#token-save").addEventListener("click", () => {
+  localStorage.setItem(TOKEN_KEY, $("#token-input").value.trim());
+  toast("令牌已保存到本机");
+  loadAll().catch((e) => toast(e.message));
+});
 
 $("#file-input").addEventListener("change", (e) => {
   const f = e.target.files[0];
@@ -189,7 +225,7 @@ $("#upload-form").addEventListener("submit", async (e) => {
   const bucket = form.bucket.value.trim();
   const filename = (form.filename.value || file.name).trim();
   const mime = form.mime.value || file.type || "application/octet-stream";
-  const q = new URLSearchParams({ bucket, filename, mime });
+  const q = new URLSearchParams({ bucket, filename, mime, auth: form.auth.checked ? "1" : "0" });
   try {
     await api("/upload?" + q.toString(), { method: "POST", body: file });
     $("#upload-modal").classList.add("hidden");
@@ -213,6 +249,7 @@ $("#meta-form").addEventListener("submit", async (e) => {
     filename: file.filename,
     newFilename: e.target.newFilename.value.trim(),
     mime: e.target.mime.value.trim(),
+    auth: e.target.auth.checked ? "1" : "0",
   });
   try {
     await api("/meta?" + q.toString(), { method: "POST" });
@@ -247,4 +284,7 @@ function debounce(fn, ms) {
   };
 }
 
-loadAll().catch((e) => toast(e.message));
+api("/auth").then((info) => {
+  setAuthStatus(!!(info && info.enabled));
+  return loadAll();
+}).catch((e) => toast(e.message));
